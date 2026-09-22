@@ -1,0 +1,9 @@
+{
+  "name": "novadrive-terminal",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@heyputer/puter.js": "latest"
+  }
+}
