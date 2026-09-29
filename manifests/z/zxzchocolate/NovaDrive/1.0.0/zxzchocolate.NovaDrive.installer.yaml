@@ -6,8 +6,8 @@ PackageVersion: 1.0.0
 Installers:
   - Architecture: x64
     InstallerType: exe
-    InstallerUrl: https://zxzchocolate.github.io/NovaDriveInstaller/install.cmd
-    InstallerSha256: REPLACE_WITH_SHA256
+    InstallerUrl: https://github.com/zxzchocolate/NovaDriveInstaller/releases/download/v1.0.0/novadrive.exe
+    InstallerSha256: 35c5d1ee9c4a95bc754f8e062067fdde18c6adf16f43ca7e6847fcec7b4d9ba2
 
 ManifestType: installer
 ManifestVersion: 1.10.0
