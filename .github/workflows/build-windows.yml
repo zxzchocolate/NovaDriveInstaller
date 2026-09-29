@@ -1,0 +1,68 @@
+name: Build NovaDrive Windows
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: npm install
+
+      - name: Bundle NovaDrive
+        shell: pwsh
+        run: |
+          npm install --no-save esbuild postject
+          npx esbuild novadrive.mjs --bundle --platform=node --format=cjs --outfile=build/novadrive.cjs
+
+      - name: Build single executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+
+          @"
+          {
+            "main": "build/novadrive.cjs",
+            "output": "build/sea-prep.blob",
+            "disableExperimentalSEAWarning": true,
+            "useSnapshot": false,
+            "useCodeCache": true
+          }
+          "@ | Set-Content sea-config.json
+
+          node --experimental-sea-config sea-config.json
+
+          Copy-Item (Get-Command node).Source build/novadrive.exe
+
+          npx postject build/novadrive.exe NODE_SEA_BLOB build/sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+
+      - name: Calculate SHA256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash build/novadrive.exe -Algorithm SHA256).Hash.ToLower()
+          "NovaDrive SHA256: $hash"
+          "NOVA_DRIVE_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          gh release create v1.0.0 build/novadrive.exe --repo "${{ github.repository }}" --title "NovaDrive v1.0.0" --notes "NovaDrive terminal client for Windows." --latest
