@@ -1,621 +1,420 @@
-#!/usr/bin/env node
-
+import http from "node:http";
+import os from "node:os";
+import { exec } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { exec } from "node:child_process";
-import { promisify } from "node:util";
-import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
 
-const execAsync = promisify(exec);
+const PORT = 45176;
 
-let puter;
+let puter = null;
+let cwd = ".";
 
 const rl = createInterface({
-    input,
-    output,
-    terminal: true
+  input,
+  output,
+  terminal: true
 });
 
-const green = text => `\x1b[92m${text}\x1b[0m`;
-const dim = text => `\x1b[90m${text}\x1b[0m`;
-const red = text => `\x1b[91m${text}\x1b[0m`;
-const blue = text => `\x1b[94m${text}\x1b[0m`;
+function getLocalIP() {
+  const interfaces = os.networkInterfaces();
 
-let cwd = ".";
-let selected = null;
-let history = [];
-
-function shownPath() {
-    if (cwd === ".") {
-        return "~";
+  for (const name of Object.keys(interfaces)) {
+    for (const info of interfaces[name] || []) {
+      if (
+        info.family === "IPv4" &&
+        !info.internal &&
+        !info.address.startsWith("127.")
+      ) {
+        return info.address;
+      }
     }
+  }
 
-    return "~/" + cwd.replace(/^\.?\//, "");
+  return "127.0.0.1";
 }
 
-function prompt() {
-    return (
-        green("nova@novadrive") +
-        dim(":") +
-        shownPath() +
-        dim("$ ")
-    );
-}
+function openBrowser(url) {
+  const platform = process.platform;
 
-function normalizePath(path) {
-
-    if (!path || path === ".") {
-        return ".";
-    }
-
-    if (path === "~") {
-        return ".";
-    }
-
-    if (path === "..") {
-
-        if (cwd === ".") {
-            return ".";
-        }
-
-        const parts = cwd.split("/");
-
-        parts.pop();
-
-        return parts.length
-            ? parts.join("/")
-            : ".";
-    }
-
-    if (path.startsWith("./")) {
-        return path;
-    }
-
-    if (cwd === ".") {
-        return path;
-    }
-
-    return cwd + "/" + path;
-}
-
-function itemName(item) {
-    return item.name || item.filename || "unknown";
-}
-
-function itemPath(item) {
-    return item.path || item.fullPath || itemName(item);
-}
-
-function isDirectory(item) {
-    return (
-        item.is_dir === true ||
-        item.isDirectory === true ||
-        item.type === "directory"
-    );
-}
-
-function formatSize(value) {
-
-    let size = Number(value || 0);
-
-    if (!size) {
-        return "-";
-    }
-
-    const units = [
-        "B",
-        "KB",
-        "MB",
-        "GB",
-        "TB"
-    ];
-
-    let index = 0;
-
-    while (
-        size >= 1024 &&
-        index < units.length - 1
-    ) {
-        size /= 1024;
-        index++;
-    }
-
-    return (
-        size.toFixed(size >= 10 ? 0 : 1) +
-        " " +
-        units[index]
-    );
+  if (platform === "win32") {
+    exec(`start "" "${url}"`);
+  } else if (platform === "darwin") {
+    exec(`open "${url}"`);
+  } else {
+    exec(`xdg-open "${url}"`);
+  }
 }
 
 async function authenticate() {
+  const ip = getLocalIP();
+  const redirectURL = `http://${ip}:${PORT}`;
 
-    const sdk = await import(
-        "@heyputer/puter.js/src/init.cjs"
-    );
+  console.log("");
+  console.log("NovaDrive authentication");
+  console.log("");
+  console.log(`Local IP: ${ip}`);
+  console.log(`Callback: ${redirectURL}`);
+  console.log("");
+  console.log("Opening Puter login...");
+  console.log("");
 
-    const getAuthToken = sdk.getAuthToken;
+  const token = await new Promise((resolve, reject) => {
+    let finished = false;
 
-    console.log(dim("Opening Puter login..."));
-    console.log("");
+    const server = http.createServer((req, res) => {
+      if (!req.url) return;
 
-    const token = await getAuthToken();
+      const url = new URL(req.url, redirectURL);
 
-    puter = sdk.init(token);
+      console.log(`Callback received: ${url.pathname}`);
 
-    console.log(
-        green("Puter authentication successful.")
-    );
+      const token =
+        url.searchParams.get("token") ||
+        url.searchParams.get("auth_token") ||
+        url.searchParams.get("authToken");
 
-    console.log("");
+      if (token) {
+        finished = true;
+
+        res.writeHead(200, {
+          "Content-Type": "text/html"
+        });
+
+        res.end(`
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>NovaDrive</title>
+</head>
+<body style="background:#111;color:#eee;font-family:monospace;padding:40px">
+<h2>NovaDrive authentication successful.</h2>
+<p>You can return to the terminal.</p>
+</body>
+</html>
+`);
+
+        server.close();
+
+        resolve(token);
+        return;
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "text/html"
+      });
+
+      res.end(`
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>NovaDrive</title>
+</head>
+<body style="background:#111;color:#eee;font-family:monospace;padding:40px">
+<h2>NovaDrive</h2>
+<p>Authentication callback received.</p>
+<p>You can return to the terminal.</p>
+</body>
+</html>
+`);
+    });
+
+    server.on("error", reject);
+
+    server.listen(PORT, "0.0.0.0", () => {
+      const loginURL =
+        `https://puter.com/?action=authme&redirectURL=` +
+        encodeURIComponent(redirectURL);
+
+      console.log(`Listening on ${redirectURL}`);
+      console.log("");
+
+      openBrowser(loginURL);
+    });
+
+    setTimeout(() => {
+      if (!finished) {
+        server.close();
+        reject(new Error("Authentication timed out."));
+      }
+    }, 5 * 60 * 1000);
+  });
+
+  const { init } = await import("@heyputer/puter.js/src/init.cjs");
+
+  puter = init(token);
+
+  console.log("");
+  console.log("Authentication successful.");
+  console.log("");
 }
 
-async function ls() {
+function resolvePath(path) {
+  if (!path || path === ".") return cwd;
 
-    const files = await puter.fs.readdir(cwd);
+  if (path === "..") {
+    if (cwd === ".") return ".";
+    const parts = cwd.split("/").filter(Boolean);
+    parts.pop();
+    return parts.length ? parts.join("/") : ".";
+  }
 
-    if (!files.length) {
-        console.log(dim("empty directory"));
-        return;
-    }
+  if (path.startsWith("/")) {
+    return path.replace(/^\/+/, "") || ".";
+  }
 
-    for (const file of files) {
+  if (cwd === ".") {
+    return path;
+  }
 
-        const prefix =
-            isDirectory(file)
-                ? blue("[DIR] ")
-                : "      ";
-
-        console.log(
-            prefix +
-            itemName(file) +
-            "    " +
-            formatSize(file.size)
-        );
-    }
+  return `${cwd}/${path}`;
 }
 
-async function cd(path) {
-
-    if (!path) {
-        cwd = ".";
-        return;
-    }
-
-    const target = normalizePath(path);
-
-    if (target === "..") {
-        cwd = normalizePath("..");
-        return;
-    }
-
-    try {
-
-        const item = await puter.fs.stat(target);
-
-        if (!isDirectory(item)) {
-            console.log(
-                red("not a directory: " + path)
-            );
-            return;
-        }
-
-        cwd = target;
-
-    } catch (error) {
-
-        console.log(
-            red("directory not found: " + path)
-        );
-    }
+function displayPath() {
+  return cwd === "." ? "~" : `~/${cwd}`;
 }
 
-async function mkdir(name) {
+async function commandLs() {
+  const files = await puter.fs.readdir(cwd);
 
-    if (!name) {
+  if (!files.length) {
+    console.log("empty");
+    return;
+  }
 
-        console.log(
-            red("usage: mkdir <name>")
-        );
+  for (const file of files) {
+    const name = file.name || file.path || "unknown";
 
-        return;
+    if (file.is_dir || file.type === "directory") {
+      console.log(`${name}/`);
+    } else {
+      console.log(name);
     }
-
-    const target = normalizePath(name);
-
-    await puter.fs.mkdir(target);
-
-    console.log(
-        green("created: ") + target
-    );
+  }
 }
 
-async function remove(path) {
+async function commandCd(path) {
+  const target = resolvePath(path || ".");
 
-    if (!path) {
+  if (target === ".") {
+    cwd = ".";
+    return;
+  }
 
-        if (!selected) {
+  const stat = await puter.fs.stat(target);
 
-            console.log(
-                red("usage: rm <file>")
-            );
+  if (!stat.is_dir && stat.type !== "directory") {
+    throw new Error("not a directory");
+  }
 
-            return;
-        }
-
-        path = selected;
-    }
-
-    const target = normalizePath(path);
-
-    await puter.fs.delete(target);
-
-    selected = null;
-
-    console.log(
-        green("removed: ") + target
-    );
+  cwd = target;
 }
 
-async function rename(oldName, newName) {
+async function commandMkdir(name) {
+  if (!name) {
+    throw new Error("usage: mkdir <name>");
+  }
 
-    if (!oldName || !newName) {
-
-        console.log(
-            red("usage: rename <old> <new>")
-        );
-
-        return;
-    }
-
-    const target = normalizePath(oldName);
-
-    await puter.fs.rename(
-        target,
-        newName
-    );
-
-    console.log(
-        green("renamed: ") +
-        oldName +
-        " -> " +
-        newName
-    );
+  await puter.fs.mkdir(resolvePath(name));
 }
 
-async function openFile(path) {
+async function commandRm(name) {
+  if (!name) {
+    throw new Error("usage: rm <file>");
+  }
 
-    if (!path) {
-
-        console.log(
-            red("usage: open <file>")
-        );
-
-        return;
-    }
-
-    const target = normalizePath(path);
-
-    try {
-
-        const url =
-            await puter.fs.getReadURL(target);
-
-        console.log("");
-        console.log(url);
-        console.log("");
-
-        if (process.platform === "darwin") {
-
-            await execAsync(
-                `open "${url}"`
-            );
-
-        } else if (process.platform === "win32") {
-
-            await execAsync(
-                `start "" "${url}"`
-            );
-
-        } else {
-
-            await execAsync(
-                `xdg-open "${url}"`
-            );
-        }
-
-    } catch (error) {
-
-        console.log(
-            red(
-                error.message ||
-                "unable to open file"
-            )
-        );
-    }
+  await puter.fs.delete(resolvePath(name));
 }
 
-async function share(path) {
+async function commandRename(oldName, newName) {
+  if (!oldName || !newName) {
+    throw new Error("usage: rename <old> <new>");
+  }
 
-    if (!path) {
-
-        console.log(
-            red("usage: share <file>")
-        );
-
-        return;
-    }
-
-    const target = normalizePath(path);
-
-    try {
-
-        const link =
-            await puter.fs.getShareLink(target);
-
-        console.log("");
-        console.log(green(link));
-        console.log("");
-
-    } catch (error) {
-
-        console.log(
-            red(
-                error.message ||
-                "unable to create share link"
-            )
-        );
-    }
+  await puter.fs.rename(
+    resolvePath(oldName),
+    resolvePath(newName)
+  );
 }
 
-async function upload(localPath) {
+async function commandOpen(name) {
+  if (!name) {
+    throw new Error("usage: open <file>");
+  }
 
-    if (!localPath) {
+  const path = resolvePath(name);
+  const url = await puter.fs.getReadURL(path);
 
-        console.log(
-            red("usage: upload <local-file>")
-        );
+  console.log(url);
 
-        return;
-    }
-
-    try {
-
-        const data =
-            await readFile(localPath);
-
-        const name =
-            basename(localPath);
-
-        const destination =
-            cwd === "."
-                ? name
-                : cwd + "/" + name;
-
-        await puter.fs.write(
-            destination,
-            data,
-            {
-                dedupeName: true
-            }
-        );
-
-        console.log(
-            green("uploaded: ") + name
-        );
-
-    } catch (error) {
-
-        console.log(
-            red(
-                error.message ||
-                "upload failed"
-            )
-        );
-    }
+  openBrowser(url);
 }
 
-function help() {
+async function commandShare(name) {
+  if (!name) {
+    throw new Error("usage: share <file>");
+  }
 
-    console.log("ls                  list files");
-    console.log("cd <dir>             enter directory");
-    console.log("cd ..                go back");
-    console.log("pwd                  show path");
-    console.log("open <file>          open file");
-    console.log("upload <file>        upload local file");
-    console.log("mkdir <name>         create directory");
-    console.log("rename <old> <new>   rename");
-    console.log("rm <file>            delete");
-    console.log("share <file>         create share link");
-    console.log("clear                clear terminal");
-    console.log("newtab               open terminal tab");
-    console.log("help                 show commands");
-    console.log("exit                 quit");
+  const path = resolvePath(name);
+
+  if (typeof puter.fs.getShareLink === "function") {
+    const link = await puter.fs.getShareLink(path);
+    console.log(link);
+    return;
+  }
+
+  const url = await puter.fs.getReadURL(path);
+  console.log(url);
 }
 
-async function command(line) {
+async function commandUpload(localPath) {
+  if (!localPath) {
+    throw new Error("usage: upload <local-file>");
+  }
 
-    const inputLine = line.trim();
+  const fs = await import("node:fs");
 
-    if (!inputLine) {
-        return;
+  if (!fs.existsSync(localPath)) {
+    throw new Error("local file not found");
+  }
+
+  const fileName = localPath.split(/[\\/]/).pop();
+  const destination =
+    cwd === "."
+      ? fileName
+      : `${cwd}/${fileName}`;
+
+  const data = fs.readFileSync(localPath);
+
+  await puter.fs.write(
+    destination,
+    data,
+    {
+      dedupeName: true
     }
+  );
 
-    history.push(inputLine);
+  console.log(`uploaded ${fileName}`);
+}
 
-    const parts =
-        inputLine.split(/\s+/);
+function commandHelp() {
+  console.log(`
+NovaDrive commands
 
-    const cmd =
-        parts.shift().toLowerCase();
+ls
+cd <directory>
+cd ..
+pwd
+mkdir <directory>
+rename <old> <new>
+rm <file>
+open <file>
+share <file>
+upload <local-file>
+clear
+help
+exit
+`);
+}
 
-    if (cmd === "help") {
-        help();
-        return;
-    }
+function commandClear() {
+  process.stdout.write("\x1b[2J\x1b[H");
+}
 
-    if (cmd === "ls") {
-        await ls();
-        return;
-    }
+async function runCommand(line) {
+  const parts = line.trim().split(/\s+/);
 
-    if (cmd === "pwd") {
+  const command = parts.shift();
 
-        console.log(
-            cwd === "."
-                ? "/"
-                : "/" + cwd
-        );
+  if (!command) return;
 
-        return;
-    }
+  switch (command) {
+    case "ls":
+      await commandLs();
+      break;
 
-    if (cmd === "cd") {
+    case "cd":
+      await commandCd(parts[0]);
+      break;
 
-        await cd(parts.join(" "));
-        return;
-    }
+    case "pwd":
+      console.log(cwd);
+      break;
 
-    if (cmd === "mkdir") {
+    case "mkdir":
+      await commandMkdir(parts[0]);
+      break;
 
-        await mkdir(parts.join(" "));
-        return;
-    }
+    case "rename":
+      await commandRename(parts[0], parts[1]);
+      break;
 
-    if (cmd === "rm") {
+    case "rm":
+      await commandRm(parts[0]);
+      break;
 
-        await remove(parts.join(" "));
-        return;
-    }
+    case "open":
+      await commandOpen(parts[0]);
+      break;
 
-    if (cmd === "rename") {
+    case "share":
+      await commandShare(parts[0]);
+      break;
 
-        if (parts.length < 2) {
+    case "upload":
+      await commandUpload(parts.join(" "));
+      break;
 
-            console.log(
-                red("usage: rename <old> <new>")
-            );
+    case "clear":
+      commandClear();
+      break;
 
-            return;
-        }
+    case "help":
+      commandHelp();
+      break;
 
-        const oldName = parts.shift();
+    case "exit":
+      rl.close();
+      process.exit(0);
 
-        await rename(
-            oldName,
-            parts.join(" ")
-        );
-
-        return;
-    }
-
-    if (cmd === "open") {
-
-        await openFile(
-            parts.join(" ")
-        );
-
-        return;
-    }
-
-    if (cmd === "share") {
-
-        await share(
-            parts.join(" ")
-        );
-
-        return;
-    }
-
-    if (cmd === "upload") {
-
-        await upload(
-            parts.join(" ")
-        );
-
-        return;
-    }
-
-    if (cmd === "clear") {
-
-        console.clear();
-        return;
-    }
-
-    if (cmd === "newtab") {
-
-        console.log(
-            dim("Use Ctrl+Shift+T for another shell tab.")
-        );
-
-        return;
-    }
-
-    if (cmd === "exit") {
-
-        process.exit(0);
-    }
-
-    console.log(
-        red("command not found: " + cmd)
-    );
+    default:
+      console.log(`command not found: ${command}`);
+  }
 }
 
 async function main() {
+  commandClear();
 
-    console.clear();
+  console.log("\x1b[1mNovaDrive\x1b[0m");
+  console.log("Puter cloud terminal");
+  console.log("");
 
-    console.log(
-        green("NovaDrive")
-    );
+  await authenticate();
 
-    console.log(
-        dim("Terminal cloud drive")
-    );
+  console.log("");
+  console.log("Type 'help' for commands.");
+  console.log("");
 
-    console.log("");
-
+  while (true) {
     try {
+      const line = await rl.question(
+        `\x1b[36mnovadrive:${displayPath()}$\x1b[0m `
+      );
 
-        await authenticate();
-
+      await runCommand(line);
     } catch (error) {
-
-        console.log(
-            red(
-                "Authentication failed: " +
-                (error.message || error)
-            )
-        );
-
-        process.exit(1);
+      console.log(
+        `error: ${error?.message || error}`
+      );
     }
-
-    console.log(
-        dim("Type help for commands.")
-    );
-
-    console.log("");
-
-    while (true) {
-
-        try {
-
-            const line =
-                await rl.question(prompt());
-
-            await command(line);
-
-        } catch (error) {
-
-            console.log(
-                red(
-                    error.message ||
-                    "command failed"
-                )
-            );
-        }
-    }
+  }
 }
 
-main();
+main().catch(error => {
+  console.error(
+    `NovaDrive failed: ${error?.message || error}`
+  );
+
+  process.exit(1);
+});
