@@ -1,0 +1,31 @@
+name: Submit NovaDrive to WinGet
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  submit:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download WinGetCreate
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
+      - name: Submit manifest
+        shell: pwsh
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINGET_CREATE_GITHUB_TOKEN)) {
+            throw "Missing WINGET_CREATE_GITHUB_TOKEN repository secret."
+          }
+
+          .\wingetcreate.exe submit "manifests\z\zxzchocolate\NovaDrive\1.0.0" --token $env:WINGET_CREATE_GITHUB_TOKEN --no-open
